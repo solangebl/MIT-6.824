@@ -5,11 +5,16 @@ import "net"
 import "os"
 import "net/rpc"
 import "net/http"
+import "sync"
+import "fmt"
 
+const MAP = "map"
+const EXIT = "exit"
 
 type Coordinator struct {
 	// Your definitions here.
-
+	Files []string
+	InProcess []string
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -21,6 +26,30 @@ type Coordinator struct {
 //
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
+	return nil
+}
+
+func (c *Coordinator) GetTask(args *TaskArgs, reply *TaskReply) error {
+
+	// TODO: if both files and inprocess are empty, move on to reduce
+	var mu sync.Mutex
+	mu.Lock()
+	defer mu.Unlock()
+	
+	// TODO: if both empty move on to reduce
+	if len(c.Files) == 0 && len(c.InProcess) == 0 {
+		reply.Task = EXIT
+	}
+	if len(c.Files)>0 {
+
+		// TODO: add filename to inProcess
+		reply.Filename = c.Files[0]
+		reply.Task = MAP
+		c.Files = c.Files[1:]
+		fmt.Printf("new files: %v\n", c.Files)
+		//c.InProcess = c.InProcess.append(c.Files)
+	}
+	
 	return nil
 }
 
@@ -49,7 +78,7 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	// TODO: return true when mapreduce is done
 
 	return ret
 }
@@ -63,7 +92,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
+	c.Files = files
 
+	fmt.Printf("Files: %v\n", c.Files)
+	fmt.Printf("Files len: %v\n", len(c.Files))
 
 	c.server()
 	return &c
