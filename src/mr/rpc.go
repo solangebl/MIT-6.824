@@ -31,8 +31,6 @@ type TaskArgs struct {
 type TaskReply struct {
 	Filename string
 	Task string
-	Wait bool
-	Map bool
 	Nreduce int
 	TaskNum int
 }

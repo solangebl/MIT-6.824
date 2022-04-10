@@ -1,12 +1,15 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-import "time"
-import "os"
-import "io/ioutil"
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -26,7 +29,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
@@ -40,7 +42,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	// declare a reply structure.
 	reply := TaskReply{}
 	for getTask(args, &reply) != false {
-		
+
 		fmt.Printf("reply.Task %v\n", reply.Task)
 		fmt.Printf("reply.Filename %v\n", reply.Filename)
 		if reply.Task == "exit" {
@@ -48,13 +50,19 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 
 		switch reply.Task {
-			case "exit":
-				return
-			case "wait":
-				time.Sleep(5*time.Second)
-			case "map":
-				runMap(reply.Filename, mapf)
-			case "reduce":
+		case "exit":
+			return
+		case "wait":
+			time.Sleep(5 * time.Second)
+		case "map":
+			var intermediate = runMap(reply.Filename, mapf)
+			fmt.Printf("Reduce tasks %v", reply.Nreduce)
+			// TODO: Partition intermediate into k => []kv so we save once to file
+			err := saveIntermediate(intermediate, reply.TaskNum, reply.Nreduce)
+			if err != nil {
+				fmt.Printf("Save intermediate error %v", err)
+			}
+		case "reduce":
 
 		}
 
@@ -65,7 +73,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func runMap(filename string, mapf func(string, string) []KeyValue) {
+func runMap(filename string, mapf func(string, string) []KeyValue) []KeyValue {
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -76,7 +84,52 @@ func runMap(filename string, mapf func(string, string) []KeyValue) {
 	}
 	file.Close()
 	kva := mapf(filename, string(content))
-	fmt.Printf("Map on %v: %v\n", filename, kva)
+	//fmt.Printf("Map on %v: %v\n", filename, kva)
+	return kva
+}
+
+func saveIntermediate(intermediate []KeyValue, taskNum int, nReduce int) error {
+
+	files := make([]*os.File, nReduce)
+	for i := 0; i < nReduce; i++ {
+		file, err := os.Create("mr-" + fmt.Sprint(taskNum) + "-" + fmt.Sprint(i))
+		if err != nil {
+			return err
+		}
+		files[i] = file
+	}
+
+	var rTask int
+	kvParted := make([][]KeyValue, nReduce)
+	for i := 0; i < len(intermediate); i++ {
+		rTask = ihash(intermediate[i].Key) % nReduce
+		kvParted[rTask] = append(kvParted[rTask], intermediate[i])
+	}
+
+	for key, v := range kvParted {
+		err := encodeAndSave(v, "mr-"+fmt.Sprint(taskNum)+"-"+fmt.Sprint(key))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+
+}
+
+func encodeAndSave(v []KeyValue, filename string) error {
+
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(file)
+	err = enc.Encode(&v)
+	if err != nil {
+		return err
+	}
+	file.Close()
+
+	return nil
 }
 
 //
@@ -118,7 +171,6 @@ func getTask(args TaskArgs, reply *TaskReply) bool {
 	if ok {
 		// reply.Y should be a filename.
 		fmt.Printf("reply.Filename %v\n", reply.Filename)
-		fmt.Printf("reply.Wait %v\n", reply.Wait)
 	} else {
 		fmt.Printf("call failed!\n")
 	}
