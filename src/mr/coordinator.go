@@ -13,6 +13,7 @@ import (
 const MAP = "map"
 const REDUCE = "reduce"
 const EXIT = "exit"
+const WAIT = "wait"
 
 type Coordinator struct {
 	// Your definitions here.
@@ -22,7 +23,9 @@ type Coordinator struct {
 }
 
 var mu sync.Mutex
-var mapCount = 1
+var mapCount = 0
+var reduceCount = 0
+var jobsDone = false
 
 // Your code here -- RPC handlers for the worker to call.
 
@@ -38,26 +41,48 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 
 func (c *Coordinator) GetTask(args *TaskArgs, reply *TaskReply) error {
 
-	// TODO: if both files and inprocess are empty, move on to reduce
 	mu.Lock()
 	defer mu.Unlock()
 
-	// TODO: if both empty move on to reduce
-	if len(c.Files) == 0 && len(c.InProcess) == 0 {
-		reply.Task = EXIT
-	}
-	if len(c.Files) > 0 {
+	// TODO: determine if there are no more pending jobs
+	//if len(c.Files) == 0 && len(c.InProcess) == 0 && reduceCount < c.NReduce {
+	if len(c.Files) == 0 && reduceCount < c.NReduce {
+		reply.TaskNum = reduceCount
+		reply.Task = REDUCE
+		reduceCount += 1
+		//reply.Task = EXIT
+	} else if len(c.Files) > 0 {
 
-		// TODO: add filename to inProcess
 		reply.Filename = c.Files[0]
 		reply.Task = MAP
 		reply.TaskNum = mapCount
 		reply.Nreduce = c.NReduce
-		mapCount += 1
 		c.Files = c.Files[1:]
 		fmt.Printf("new files: %v\n", c.Files)
-		//c.InProcess = append(c.InProcess.append, c.Files)
+		//c.InProcess[mapCount] = reply.Filename
+		//fmt.Printf("in process files: %v\n", c.InProcess)
+		mapCount += 1
+	} else {
+		reply.Task = EXIT
+		//jobsDone = true
 	}
+
+	/*
+		else if len(c.InProcess) > 0 {
+			reply.Task = WAIT
+		}*/
+
+	return nil
+}
+
+func (c *Coordinator) TaskDone(args *TaskArgs, reply *TaskReply) error {
+
+	// TODO: if both files and inprocess are empty, move on to reduce
+	mu.Lock()
+	defer mu.Unlock()
+
+	//c.InProcess = append(c.InProcess[:args.X], c.InProcess[(args.X)+1:]...)
+	//fmt.Printf("in process len: %v\n", len(c.InProcess))
 
 	return nil
 }
@@ -83,12 +108,11 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
 
 	// Your code here.
 	// TODO: return true when mapreduce is done
 
-	return ret
+	return jobsDone
 }
 
 //
@@ -102,6 +126,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// Your code here.
 	c.Files = files
 	c.NReduce = nReduce
+	c.InProcess = make([]string, len(files))
 
 	fmt.Printf("Files: %v\n", c.Files)
 	fmt.Printf("Files len: %v\n", len(c.Files))

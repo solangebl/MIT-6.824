@@ -8,6 +8,9 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"time"
 )
 
@@ -18,6 +21,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -56,14 +67,15 @@ func Worker(mapf func(string, string) []KeyValue,
 			time.Sleep(5 * time.Second)
 		case "map":
 			var intermediate = runMap(reply.Filename, mapf)
-			fmt.Printf("Reduce tasks %v", reply.Nreduce)
 			// TODO: Partition intermediate into k => []kv so we save once to file
 			err := saveIntermediate(intermediate, reply.TaskNum, reply.Nreduce)
 			if err != nil {
 				fmt.Printf("Save intermediate error %v", err)
 			}
+			_ = mapDone(reply.TaskNum)
 		case "reduce":
-
+			fmt.Printf("reduce task %v", reply.TaskNum)
+			runReduce(reply.TaskNum, reducef)
 		}
 
 		reply = TaskReply{}
@@ -86,6 +98,34 @@ func runMap(filename string, mapf func(string, string) []KeyValue) []KeyValue {
 	kva := mapf(filename, string(content))
 	//fmt.Printf("Map on %v: %v\n", filename, kva)
 	return kva
+}
+
+func runReduce(rNumber int, reducef func(string, []string) string) {
+
+	oname := "mr-out-" + fmt.Sprint(rNumber)
+	ofile, _ := os.Create(oname)
+
+	intermediate := mergeIntermediateValues(rNumber)
+
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+		i = j
+	}
+
+	ofile.Close()
 }
 
 func saveIntermediate(intermediate []KeyValue, taskNum int, nReduce int) error {
@@ -118,6 +158,8 @@ func saveIntermediate(intermediate []KeyValue, taskNum int, nReduce int) error {
 
 func encodeAndSave(v []KeyValue, filename string) error {
 
+	sort.Sort(ByKey(v))
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
@@ -130,6 +172,43 @@ func encodeAndSave(v []KeyValue, filename string) error {
 	file.Close()
 
 	return nil
+}
+
+func mergeIntermediateValues(i int) []KeyValue {
+
+	var intermediate []KeyValue
+	regexn := `mr-\d+-` + fmt.Sprint(i)
+
+	path, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			log.Fatalf(err.Error())
+		}
+		filename := info.Name()
+		obj, _ := regexp.Match(regexn, []byte(filename))
+		if obj == true {
+			file, err := os.Open(filename)
+			if err != nil {
+				log.Fatalf("cannot read %v", filename)
+			}
+			dec := json.NewDecoder(file)
+			for {
+				var kv []KeyValue
+				if err := dec.Decode(&kv); err != nil {
+					break
+				}
+				intermediate = append(intermediate, kv...)
+			}
+		}
+		return nil
+	})
+
+	sort.Sort(ByKey(intermediate))
+
+	return intermediate
 }
 
 //
@@ -173,6 +252,20 @@ func getTask(args TaskArgs, reply *TaskReply) bool {
 		fmt.Printf("reply.Filename %v\n", reply.Filename)
 	} else {
 		fmt.Printf("call failed!\n")
+	}
+
+	return ok
+}
+
+func mapDone(taskNum int) bool {
+
+	// declare an argument structure.
+	args := TaskArgs{taskNum}
+	// declare a reply structure.
+	reply := TaskReply{}
+	ok := call("Coordinator.TaskDone", &args, &reply)
+	if !ok {
+		fmt.Printf("mapDone call failed!\n")
 	}
 
 	return ok
